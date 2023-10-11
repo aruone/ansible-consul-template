@@ -37,28 +37,43 @@
 - name: check archive stat
   stat: path={{ consul_template_staging_area }}/{{ consul_template_archive_file }}
   register: consul_template_archive_stat
+  when: not consul_template_local_install
+
+- name: check local archive
+  local_action: stat path={{ role_path }}/files/{{ consul_template_archive_file }}
+  register: consul_template_archive_stat_local
+  when: consul_template_local_install
 
 - name: download consul-template binary
   get_url:
     url: "{{ consul_template_download_url }}"
     dest: "{{ consul_template_staging_area }}"
-  when: consul_template_archive_stat.stat.exists == False
+  when: not consul_template_local_install and consul_template_archive_stat.stat.exists == False
+
+- name: download consul-template binary locally
+  local_action:
+    module: get_url
+    url: "{{ consul_template_download_url }}"
+    dest: "{{ role_path }}/files"
+  when: consul_template_local_install and consul_template_archive_stat_local.stat.exists == False
 
 - name: unzip the downloaded package
   unarchive:
     src: "{{ consul_template_staging_area }}/{{ consul_template_archive_file }}"
-    dest: "{{ consul_template_staging_area }}"
+    dest: "{{ consul_template_home }}/bin"
     owner: "root"
     group: "root"
-    copy: False
-    creates: "{{ consul_template_staging_area }}/{{ consul_template_binary }}"
-  when: not ansible_check_mode
+    remote_src: true
+  when: not ansible_check_mode and not consul_template_local_install
 
-- name: copy consul-template binary into place
-  command: cp {{ consul_template_staging_area }}/{{ consul_template_binary }} {{ consul_template_home }}/bin/{{ consul_template_binary }}
-    creates={{ consul_template_home }}/bin/{{ consul_template_binary }}
-  when: not ansible_check_mode
-
+- name: unzip the downloaded package
+  unarchive:
+    src: "{{ consul_template_archive_file }}"
+    dest: "{{ consul_template_home }}/bin"
+    owner: "root"
+    group: "root"
+  when: not ansible_check_mode and consul_template_local_install  
+  
 - name: Update consul-template permissions
   file:
     path: "{{ consul_template_home }}/bin/{{ consul_template_binary }}"
@@ -108,13 +123,14 @@
     mode={{ consul_template_config_file_mode }}
 
 - name: copy template files
-  copy: src="{{ item.src }}" dest="{{ consul_template_home }}/templates/{{ item.src | basename }}"
+  copy: src="{{ item }}" dest="{{ consul_template_home }}/templates/{{ item | basename }}"
   with_items: "{{ consul_template_template_files }}"
   when: consul_template_template_files | length > 0
   notify: restart consul-template
 
 - name: copy template templates
-  template: src={{ item.src }} dest="{{ consul_template_home }}/templates/{{ item.dest if item.dest is defined else item.src | basename | regex_replace('^(.*)\.j2$', '\\1') }}"
+  template: src={{ item.src }} dest="{{ consul_template_home }}/templates/{{ item.dest if item.dest is defined else item.src | basename | regex_replace('^(.*)\.j2$', '\\1') }}"
   with_items: "{{ consul_template_template_templates }}"
   when: consul_template_template_templates | length > 0
   notify: restart consul-template
+  tags: template_templates
